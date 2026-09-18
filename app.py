@@ -10,8 +10,8 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.units import mm
 
 st.set_page_config(page_title="Comparative Vertical Financial Statement Converter", layout="wide")
-st.title("Financial Statement Converter — V8 — Optional Trading Account")
-st.caption("Upload current and previous-year P&L and Balance Sheet PDFs. Trading Account is optional for either year. Current/latest year is always shown first. Missing figures are never invented.")
+st.title("Financial Statement Converter — V9 — Manual Adjustments & Signatories")
+st.caption("Upload current and previous-year P&L and Balance Sheet PDFs. Trading Account is optional for either year. Current/latest year is always shown first. Missing figures are never invented. Manual additions are separately identified and reconciled.")
 
 PL_HEADS = ["Revenue from operations","Other Income","Cost of goods sold","Employee benefits expense",
             "Finance costs","Depreciation and amortization expense","Other expenses"]
@@ -219,9 +219,10 @@ def aggregate(rows, heads):
 
 def fmt(x): return f"{x:,.2f}"
 
-def pdf(entity, address, cy, py, cpl, ppl, cbs, pbs, warnings, c_source_profit=None, p_source_profit=None, c_has_trading=True, p_has_trading=True):
+def pdf(entity, address, cy, py, cpl, ppl, cbs, pbs, warnings, c_source_profit=None, p_source_profit=None, c_has_trading=True, p_has_trading=True, sign=None):
     out=io.BytesIO()
     doc=SimpleDocTemplate(out,pagesize=A4,rightMargin=11*mm,leftMargin=11*mm,topMargin=12*mm,bottomMargin=12*mm)
+    sign = sign or {}
     styles=getSampleStyleSheet()
     title=ParagraphStyle("t",parent=styles["Heading2"],alignment=TA_CENTER,fontSize=11,leading=13,spaceAfter=3)
     note=ParagraphStyle("n",parent=styles["BodyText"],fontSize=7.5,leading=9)
@@ -260,6 +261,30 @@ def pdf(entity, address, cy, py, cpl, ppl, cbs, pbs, warnings, c_source_profit=N
                            ("FONTSIZE",(0,0),(-1,-1),7.7),("VALIGN",(0,0),(-1,-1),"TOP")]))
     story += [t,Spacer(1,7)]
     for w in warnings: story.append(Paragraph("• "+w,note))
+
+    def signature_block():
+        ca_firm=sign.get("ca_firm","").strip(); ca_des=sign.get("ca_designation","").strip()
+        ca_name=sign.get("ca_name","").strip(); mem=sign.get("membership","").strip()
+        ent_for=sign.get("entity_for","").strip(); ent_name=sign.get("entity_signatory","").strip(); ent_des=sign.get("entity_designation","").strip()
+        place=sign.get("place","").strip(); date=sign.get("date","").strip()
+        left=[]; right=[]
+        if ca_firm: left.append(Paragraph("<b>For "+ca_firm+"</b>",note))
+        if ca_des: left.append(Paragraph(ca_des,note))
+        left += [Spacer(1,16)]
+        if ca_name: left.append(Paragraph("<b>"+ca_name+"</b>",note))
+        if mem: left.append(Paragraph("Membership No.: "+mem,note))
+        if ent_for: right.append(Paragraph("<b>For "+ent_for+"</b>",note))
+        right += [Spacer(1,16)]
+        if ent_name: right.append(Paragraph("<b>"+ent_name+"</b>",note))
+        if ent_des: right.append(Paragraph(ent_des,note))
+        sig=Table([[left,right]],colWidths=[91*mm,91*mm])
+        sig.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"TOP"),("LEFTPADDING",(0,0),(-1,-1),0),("RIGHTPADDING",(0,0),(-1,-1),4)]))
+        tail=[]
+        if place or date:
+            tail.append(Spacer(1,8)); tail.append(Paragraph(("Place: "+place if place else "") + ("&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Date: "+date if date else ""),note))
+        return [Spacer(1,10),sig]+tail
+
+    story += signature_block()
     story += [PageBreak(),Paragraph(entity,title)]
     if address.strip(): story.append(Paragraph(address.strip(), ParagraphStyle("addr2",parent=styles["BodyText"],alignment=TA_CENTER,fontSize=8.5,leading=10,spaceAfter=3)))
     story += [Paragraph(f"Balance Sheet as at 31 March {cy}",title),Spacer(1,4)]
@@ -283,7 +308,9 @@ def pdf(entity, address, cy, py, cpl, ppl, cbs, pbs, warnings, c_source_profit=N
                             ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTNAME",(0,1),(-1,1),"Helvetica-Bold"),
                             ("FONTNAME",(0,len(liab)+3),(-1,len(liab)+3),"Helvetica-Bold"),
                             ("ALIGN",(1,0),(-1,-1),"RIGHT"),("FONTSIZE",(0,0),(-1,-1),7.5)]))
-    story += [tb,PageBreak(),Paragraph("Source Ledger Mapping / Review Schedule",title)]
+    story += [tb]
+    story += signature_block()
+    story += [PageBreak(),Paragraph("Source Ledger Mapping / Review Schedule",title)]
     m=[["Year","Statement","Source ledger","Vertical head","Amount"]]
     for yr,stname,rows in [(cy,"P&L",cpl),(py,"P&L",ppl),(cy,"Balance Sheet",cbs),(py,"Balance Sheet",pbs)]:
         for r in rows:m.append([yr,stname,r["Source ledger"],r["Vertical head"],fmt(r["Amount"])])
@@ -317,6 +344,21 @@ with p3:
 entity=st.text_input("Entity name",value="M/S DEV BHUMI APPLE TRADERS")
 address=st.text_input("Entity address",value="B-10, FLAT NO-9, SECTOR-18, ROHINI, DELHI", help="Editable. For other clients, replace this with the address appearing in the uploaded statements.")
 
+st.markdown("### Signatory / footer details (printed on both P&L and Balance Sheet)")
+sg1,sg2=st.columns(2)
+with sg1:
+    ca_firm=st.text_input("Chartered Accountant firm", value="Lakshya Budhiraja & Associates")
+    ca_designation=st.text_input("CA designation", value="Chartered Accountant")
+    ca_name=st.text_input("CA / Proprietor name", value="LAKSHYA BUDHIRAJA (PROPREITOR)")
+    membership=st.text_input("Membership No.", value="535942")
+with sg2:
+    entity_for=st.text_input("For (Entity)", value=entity)
+    entity_signatory=st.text_input("Entity signatory name", value="MAN SINGH THAKUR")
+    entity_designation=st.text_input("Entity signatory designation", value="Proprietor")
+    place=st.text_input("Place", value="NEW DELHI")
+    sign_date=st.text_input("Date", value="16/09/2026", help="Use DD/MM/YYYY")
+sign={"ca_firm":ca_firm,"ca_designation":ca_designation,"ca_name":ca_name,"membership":membership,"entity_for":entity_for,"entity_signatory":entity_signatory,"entity_designation":entity_designation,"place":place,"date":sign_date}
+
 required_ok=all([cplf,cbsf,pplf,pbsf])
 if required_ok:
     cplt=text(cplf); bt=text(cbsf); pplt=text(pplf); pbt=text(pbsf)
@@ -340,10 +382,41 @@ if required_ok:
         pass
 
     cpl=parse_pl(ct); ppl=parse_pl(pt); cbs=parse_bs(bt); pbs=parse_bs(pbt)
+
+    st.markdown("### Manual additions / missing items")
+    st.caption("Use this only where an item or amount is missing from automatic extraction. Added rows are included in the PDF and all reconciliation checks. Leave the number of rows at 0 if nothing is missing.")
+    def manual_rows(label, heads, key):
+        n=st.number_input(f"Number of manual rows — {label}", min_value=0, max_value=20, value=0, step=1, key=key+"n")
+        out=[]
+        for i in range(int(n)):
+            a,b,c,d=st.columns([3,3,2,1])
+            name=a.text_input("Particular / ledger", key=f"{key}name{i}")
+            head=b.selectbox("Vertical head", heads, key=f"{key}head{i}")
+            amount=c.number_input("Amount (₹)", value=0.0, step=1.0, format="%.2f", key=f"{key}amt{i}")
+            note=d.text_input("Note", key=f"{key}note{i}")
+            if name.strip() or abs(amount)>0.005:
+                out.append({"Source ledger": (name.strip() or "Manual adjustment") + (f" [Note {note}]" if note.strip() else "") + " [MANUAL]", "Vertical head":head, "Amount":float(amount)})
+        return out
+    ma1,ma2=st.columns(2)
+    with ma1:
+        cpl += manual_rows(f"{cy} Profit & Loss", PL_HEADS, "mcpl")
+        cbs += manual_rows(f"{cy} Balance Sheet", BS_HEADS, "mcbs")
+    with ma2:
+        ppl += manual_rows(f"{py} Profit & Loss", PL_HEADS, "mppl")
+        pbs += manual_rows(f"{py} Balance Sheet", BS_HEADS, "mpbs")
+
     c_has_trading=bool(ctrdf) or any(r["Vertical head"]=="Revenue from operations" for r in cpl)
     p_has_trading=bool(ptrdf) or any(r["Vertical head"]=="Revenue from operations" for r in ppl)
     csnp=source_net_profit(cplt); psnp=source_net_profit(pplt)
     warnings=[]
+
+    def bs_difference(rows):
+        a=aggregate(rows,BS_HEADS); liab=BS_HEADS[:10]; assets=BS_HEADS[10:]
+        return sum(a[h] for h in assets)-sum(a[h] for h in liab)
+    for yr,rows in [(cy,cbs),(py,pbs)]:
+        d=bs_difference(rows)
+        if abs(d)>1.0: warnings.append(f"{yr}: BALANCE SHEET DOES NOT RECONCILE — Assets less Equity & Liabilities = ₹{d:,.2f}.")
+        else: warnings.append(f"{yr}: Balance Sheet reconciled (difference ₹{d:,.2f}).")
 
     def computed_profit(rows):
         a=aggregate(rows,PL_HEADS)
@@ -389,7 +462,7 @@ if required_ok:
                 a,b,c=st.columns([3,2,4]); a.write(r["Source ledger"]); b.write(f"₹{r['Amount']:,.2f}")
                 r["Vertical head"]=c.selectbox("Head",heads,index=heads.index(r["Vertical head"]),key=f"{prefix_key}{i}",label_visibility="collapsed")
     for w in warnings: st.warning(w)
-    data=pdf(entity,address,cy,py,cpl,ppl,cbs,pbs,warnings,csnp,psnp,c_has_trading,p_has_trading)
+    data=pdf(entity,address,cy,py,cpl,ppl,cbs,pbs,warnings,csnp,psnp,c_has_trading,p_has_trading,sign)
     st.download_button("Generate comparative vertical PDF (review before finalisation)",data=data,file_name=f"{entity.replace(' ','_')}_comparative_vertical.pdf",mime="application/pdf")
 else:
     st.info("Upload the four required PDFs: current P&L, current Balance Sheet, previous P&L and previous Balance Sheet. Trading Account PDFs are optional for either year.")
