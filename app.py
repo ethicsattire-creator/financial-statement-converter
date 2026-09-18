@@ -10,8 +10,8 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.units import mm
 
 st.set_page_config(page_title="Comparative Vertical Financial Statement Converter", layout="wide")
-st.title("Financial Statement Converter — V9 — Manual Adjustments & Signatories")
-st.caption("Upload current and previous-year P&L and Balance Sheet PDFs. Trading Account is optional for either year. Current/latest year is always shown first. Missing figures are never invented. Manual additions are separately identified and reconciled.")
+st.title("Financial Statement Converter — V10 — Draft → Edit → Final PDF")
+st.caption("Upload the source statements and first generate a Draft PDF. After reviewing the draft, use the Post-generation Corrections section to add missing items or amounts, then regenerate the Final PDF. Trading Account remains optional and the latest year is always shown first.")
 
 PL_HEADS = ["Revenue from operations","Other Income","Cost of goods sold","Employee benefits expense",
             "Finance costs","Depreciation and amortization expense","Other expenses"]
@@ -383,8 +383,18 @@ if required_ok:
 
     cpl=parse_pl(ct); ppl=parse_pl(pt); cbs=parse_bs(bt); pbs=parse_bs(pbt)
 
-    st.markdown("### Manual additions / missing items")
-    st.caption("Use this only where an item or amount is missing from automatic extraction. Added rows are included in the PDF and all reconciliation checks. Leave the number of rows at 0 if nothing is missing.")
+    # First-stage draft: generated only from the source PDFs and automatic extraction.
+    draft_notes = ["DRAFT — Review before finalisation. Post-generation corrections can be entered in the app after reviewing this PDF."]
+    draft_data = pdf(entity,address,cy,py,cpl,ppl,cbs,pbs,draft_notes,source_net_profit(cplt),source_net_profit(pplt),
+                     bool(ctrdf) or any(r["Vertical head"]=="Revenue from operations" for r in cpl),
+                     bool(ptrdf) or any(r["Vertical head"]=="Revenue from operations" for r in ppl),sign)
+    st.markdown("### Step 1 — Generate and review Draft PDF")
+    st.caption("Download this draft first. If an item or amount is missing, return to this same screen and enter it in Step 2 below. The source PDFs remain unchanged.")
+    st.download_button("Download Draft PDF", data=draft_data,
+                       file_name=f"{entity.replace(' ','_')}_DRAFT_vertical.pdf", mime="application/pdf", key="draftpdf")
+
+    st.markdown("### Step 2 — Post-generation corrections / additions")
+    st.caption("Use this AFTER reviewing the Draft PDF. Add only items or amounts that are missing from the generated draft. These entries will appear in the Final PDF and will be included in reconciliation checks. Leave all row counts at 0 when no correction is required.")
     def manual_rows(label, heads, key):
         n=st.number_input(f"Number of manual rows — {label}", min_value=0, max_value=20, value=0, step=1, key=key+"n")
         out=[]
@@ -463,6 +473,8 @@ if required_ok:
                 r["Vertical head"]=c.selectbox("Head",heads,index=heads.index(r["Vertical head"]),key=f"{prefix_key}{i}",label_visibility="collapsed")
     for w in warnings: st.warning(w)
     data=pdf(entity,address,cy,py,cpl,ppl,cbs,pbs,warnings,csnp,psnp,c_has_trading,p_has_trading,sign)
-    st.download_button("Generate comparative vertical PDF (review before finalisation)",data=data,file_name=f"{entity.replace(' ','_')}_comparative_vertical.pdf",mime="application/pdf")
+    st.markdown("### Step 3 — Regenerate Final PDF")
+    st.caption("The Final PDF includes the post-generation corrections above. Recheck all warnings before signing or filing.")
+    st.download_button("Download Final Corrected PDF",data=data,file_name=f"{entity.replace(' ','_')}_FINAL_vertical.pdf",mime="application/pdf",key="finalpdf")
 else:
     st.info("Upload the four required PDFs: current P&L, current Balance Sheet, previous P&L and previous Balance Sheet. Trading Account PDFs are optional for either year.")
