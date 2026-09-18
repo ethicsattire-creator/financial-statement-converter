@@ -10,7 +10,7 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.units import mm
 
 st.set_page_config(page_title="Comparative Vertical Financial Statement Converter", layout="wide")
-st.title("Financial Statement Converter — V6 — Reconciled P&L Engine")
+st.title("Financial Statement Converter — V7 — Source-Aware P&L Engine")
 st.caption("Upload two years of horizontal financial statements, review accounting classifications, and generate a comparative vertical-format PDF. Missing figures are never invented.")
 
 PL_HEADS = ["Revenue from operations","Other Income","Cost of goods sold","Employee benefits expense",
@@ -127,19 +127,26 @@ def parse_pl(t):
     for line in lines:
         # Resolve a wrapped ledger from the preceding line when this line starts with its amount.
         if pending_debit:
-            mm=re.match(r"^(%s)(?:\s|$)" % money, line)
+            # Wrapped Tally rows often look like:
+            #   To Workmen and Staff Welfare
+            #   Expenses 76,218.00
+            # The continuation may contain more ledger words before the amount.
+            mm=re.match(r"^(.*?)(%s)(?:\s|$)" % money, line)
             if mm:
-                low=pending_debit.lower()
+                continuation=_clean_ledger(mm.group(1))
+                full_name=_clean_ledger(pending_debit + (" " + continuation if continuation else ""))
+                low=full_name.lower()
                 if not any(x in low for x in ["gross profit","gross loss","net profit","net loss","total"]):
-                    add(pending_debit,mm.group(1),debit_head(pending_debit))
+                    add(full_name,mm.group(2),debit_head(full_name))
                 pending_debit=None
-                # Do not continue: the same physical line may also contain a credit-side entry.
         if pending_credit:
-            mm=re.match(r"^(%s)(?:\s|$)" % money, line)
+            mm=re.match(r"^(.*?)(%s)(?:\s|$)" % money, line)
             if mm:
-                low=pending_credit.lower()
+                continuation=_clean_ledger(mm.group(1))
+                full_name=_clean_ledger(pending_credit + (" " + continuation if continuation else ""))
+                low=full_name.lower()
                 if not any(x in low for x in ["gross profit","gross loss","net profit","net loss","closing stock","total"]):
-                    add(pending_credit,mm.group(1),credit_head(pending_credit))
+                    add(full_name,mm.group(2),credit_head(full_name))
                 pending_credit=None
 
         # Split a horizontal row at the credit-side By marker.
@@ -297,16 +304,30 @@ if all([cplf,cbsf,pplf,pbsf]):
     py=year_from(pt) or year_from(pbt) or "Previous"
     cpl,ppl,cbs,pbs=parse_pl(ct),parse_pl(pt),parse_bs(bt),parse_bs(pbt)
     warnings=[]
-    # Hard accounting control: compare computed vertical profit with source Net Profit where available.
+    # Hard accounting control. If a Trading A/c is present, reconcile the full
+    # vertical statement. If only the P&L is present, reconcile Gross Profit less
+    # the extracted indirect expenses. This validates extraction without inventing Sales/COGS.
     def computed_profit(rows):
         a=aggregate(rows,PL_HEADS)
         income=a["Revenue from operations"]+a["Other Income"]
         expenses=sum(a[h] for h in ["Cost of goods sold","Employee benefits expense","Finance costs","Depreciation and amortization expense","Other expenses"])
         return income-expenses
+    def source_aware_profit(rows, txt):
+        a=aggregate(rows,PL_HEADS)
+        if abs(a["Revenue from operations"]) > 0.005:
+            return computed_profit(rows), "vertical statement"
+        gp=source_gross_profit(txt)
+        if gp is not None:
+            indirect=sum(a[h] for h in ["Employee benefits expense","Finance costs","Depreciation and amortization expense","Other expenses"])
+            return gp + a["Other Income"] - indirect, "Gross Profit less extracted P&L expenses"
+        return computed_profit(rows), "incomplete statement"
     for yr,txt,rows in [(cy,ct,cpl),(py,pt,ppl)]:
         snp=source_net_profit(txt)
-        if snp is not None and abs(computed_profit(rows)-snp)>1.0:
-            warnings.append(f"{yr}: P&L DOES NOT RECONCILE — REVIEW REQUIRED. Computed profit ₹{computed_profit(rows):,.2f} differs from source Net Profit ₹{snp:,.2f}.")
+        calc,basis=source_aware_profit(rows,txt)
+        if snp is not None and abs(calc-snp)>1.0:
+            warnings.append(f"{yr}: P&L DOES NOT RECONCILE — REVIEW REQUIRED. {basis} gives ₹{calc:,.2f}, while source Net Profit is ₹{snp:,.2f}.")
+        elif snp is not None:
+            warnings.append(f"{yr}: P&L RECONCILED. {basis} agrees with source Net Profit ₹{snp:,.2f}.")
     if not any(r["Vertical head"]=="Revenue from operations" for r in cpl):
         gp=source_gross_profit(ct)
         extra=f" The source P&L contains Gross Profit ₹{gp:,.2f}, but Gross Profit alone cannot establish Sales and Cost of Goods Sold." if gp is not None else ""
