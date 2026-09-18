@@ -10,8 +10,8 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.units import mm
 
 st.set_page_config(page_title="Comparative Vertical Financial Statement Converter", layout="wide")
-st.title("Financial Statement Converter — V7 — Source-Aware P&L Engine")
-st.caption("Upload two years of horizontal financial statements, review accounting classifications, and generate a comparative vertical-format PDF. Missing figures are never invented.")
+st.title("Financial Statement Converter — V8 — Optional Trading Account")
+st.caption("Upload current and previous-year P&L and Balance Sheet PDFs. Trading Account is optional for either year. Current/latest year is always shown first. Missing figures are never invented.")
 
 PL_HEADS = ["Revenue from operations","Other Income","Cost of goods sold","Employee benefits expense",
             "Finance costs","Depreciation and amortization expense","Other expenses"]
@@ -219,7 +219,7 @@ def aggregate(rows, heads):
 
 def fmt(x): return f"{x:,.2f}"
 
-def pdf(entity, address, cy, py, cpl, ppl, cbs, pbs, warnings):
+def pdf(entity, address, cy, py, cpl, ppl, cbs, pbs, warnings, c_source_profit=None, p_source_profit=None, c_has_trading=True, p_has_trading=True):
     out=io.BytesIO()
     doc=SimpleDocTemplate(out,pagesize=A4,rightMargin=11*mm,leftMargin=11*mm,topMargin=12*mm,bottomMargin=12*mm)
     styles=getSampleStyleSheet()
@@ -232,19 +232,27 @@ def pdf(entity, address, cy, py, cpl, ppl, cbs, pbs, warnings):
     ti=lambda a:a["Revenue from operations"]+a["Other Income"]
     te=lambda a:sum(a[h] for h in ["Cost of goods sold","Employee benefits expense","Finance costs","Depreciation and amortization expense","Other expenses"])
     p=lambda a:ti(a)-te(a)
+    # When no separate Trading Account exists, Revenue/COGS may legitimately be unavailable.
+    # In that case the face statement must not manufacture a loss from zero revenue;
+    # use the explicit source Net Profit for the final profit line and mark unavailable
+    # Revenue/COGS cells as N/A.
+    def face_profit(a, source_profit, has_trading):
+        return p(a) if has_trading else (source_profit if source_profit is not None else p(a))
+    def cell(v, available=True):
+        return fmt(v) if available else "N/A"
     pdata=[["Particulars","Note",f"31 March {cy}",f"31 March {py}"],
-           ["Revenue from operations","19",fmt(ca["Revenue from operations"]),fmt(pa["Revenue from operations"])],
+           ["Revenue from operations","19",cell(ca["Revenue from operations"],c_has_trading),cell(pa["Revenue from operations"],p_has_trading)],
            ["Other Income","20",fmt(ca["Other Income"]),fmt(pa["Other Income"])],
-           ["Total Income (I+II)","",fmt(ti(ca)),fmt(ti(pa))],
+           ["Total Income (I+II)","",cell(ti(ca),c_has_trading),cell(ti(pa),p_has_trading)],
            ["Expenses:","","",""],
-           ["Cost of goods sold","21",fmt(ca["Cost of goods sold"]),fmt(pa["Cost of goods sold"])],
+           ["Cost of goods sold","21",cell(ca["Cost of goods sold"],c_has_trading),cell(pa["Cost of goods sold"],p_has_trading)],
            ["Employee benefits expense","22",fmt(ca["Employee benefits expense"]),fmt(pa["Employee benefits expense"])],
            ["Finance costs","23",fmt(ca["Finance costs"]),fmt(pa["Finance costs"])],
            ["Depreciation and amortization expense","24",fmt(ca["Depreciation and amortization expense"]),fmt(pa["Depreciation and amortization expense"])],
            ["Other expenses","25",fmt(ca["Other expenses"]),fmt(pa["Other expenses"])],
-           ["Total expenses","",fmt(te(ca)),fmt(te(pa))],
-           ["Profit/(loss) before tax","",fmt(p(ca)),fmt(p(pa))],
-           ["Profit/(Loss) for the year","",fmt(p(ca)),fmt(p(pa))]]
+           ["Total expenses","",cell(te(ca),c_has_trading),cell(te(pa),p_has_trading)],
+           ["Profit/(loss) before tax","",fmt(face_profit(ca,c_source_profit,c_has_trading)),fmt(face_profit(pa,p_source_profit,p_has_trading))],
+           ["Profit/(Loss) for the year","",fmt(face_profit(ca,c_source_profit,c_has_trading)),fmt(face_profit(pa,p_source_profit,p_has_trading))]]
     t=Table(pdata,colWidths=[96*mm,15*mm,36*mm,36*mm],repeatRows=1)
     t.setStyle(TableStyle([("GRID",(0,0),(-1,-1),.35,colors.black),("BACKGROUND",(0,0),(-1,0),colors.lightgrey),
                            ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTNAME",(0,3),(-1,3),"Helvetica-Bold"),
@@ -285,64 +293,103 @@ def pdf(entity, address, cy, py, cpl, ppl, cbs, pbs, warnings):
                             ("VALIGN",(0,0),(-1,-1),"TOP"),("ALIGN",(-1,1),(-1,-1),"RIGHT")]))
     story.append(mt); doc.build(story); out.seek(0); return out.getvalue()
 
-cplf=st.file_uploader("Current-year P&L / Trading PDF(s)",type=["pdf"],accept_multiple_files=True, help="Upload both P&L and Trading Account PDFs if they are separate files.")
-cbsf=st.file_uploader("Current-year Balance Sheet PDF",type=["pdf"])
-pplf=st.file_uploader("Previous-year P&L / Trading PDF(s)",type=["pdf"],accept_multiple_files=True, help="Upload both P&L and Trading Account PDFs if they are separate files.")
-pbsf=st.file_uploader("Previous-year Balance Sheet PDF",type=["pdf"])
+# Separate upload boxes make the accounting source explicit. Trading Account is optional.
+st.markdown("### Current / latest year")
+c1,c2,c3=st.columns(3)
+with c1:
+    ctrdf=st.file_uploader("Current-year Trading Account PDF (optional)",type=["pdf"],key="ctrd")
+    c_no_trading=st.checkbox("No separate Trading Account for current year",key="cnt")
+with c2:
+    cplf=st.file_uploader("Current-year Profit & Loss Account PDF",type=["pdf"],key="cpl")
+with c3:
+    cbsf=st.file_uploader("Current-year Balance Sheet PDF",type=["pdf"],key="cbs")
+
+st.markdown("### Previous year")
+p1,p2,p3=st.columns(3)
+with p1:
+    ptrdf=st.file_uploader("Previous-year Trading Account PDF (optional)",type=["pdf"],key="ptrd")
+    p_no_trading=st.checkbox("No separate Trading Account for previous year",key="pnt")
+with p2:
+    pplf=st.file_uploader("Previous-year Profit & Loss Account PDF",type=["pdf"],key="ppl")
+with p3:
+    pbsf=st.file_uploader("Previous-year Balance Sheet PDF",type=["pdf"],key="pbs")
+
 entity=st.text_input("Entity name",value="M/S DEV BHUMI APPLE TRADERS")
 address=st.text_input("Entity address",value="B-10, FLAT NO-9, SECTOR-18, ROHINI, DELHI", help="Editable. For other clients, replace this with the address appearing in the uploaded statements.")
 
-if all([cplf,cbsf,pplf,pbsf]):
-    ct="\n".join(text(f) for f in cplf)
-    bt=text(cbsf)
-    pt="\n".join(text(f) for f in pplf)
-    pbt=text(pbsf)
-    detected_address=address_from(ct,bt,pt,pbt)
+required_ok=all([cplf,cbsf,pplf,pbsf])
+if required_ok:
+    cplt=text(cplf); bt=text(cbsf); pplt=text(pplf); pbt=text(pbsf)
+    ctrdt=text(ctrdf) if ctrdf else ""
+    ptrdt=text(ptrdf) if ptrdf else ""
+    ct=cplt + ("\n"+ctrdt if ctrdt else "")
+    pt=pplt + ("\n"+ptrdt if ptrdt else "")
+
+    detected_address=address_from(cplt,bt,pplt,pbt)
     if detected_address and detected_address.lower() != address.strip().lower():
         st.info(f"Address detected in uploaded statements: {detected_address}. Edit the Entity address field above if required.")
-    cy=year_from(ct) or year_from(bt) or "Current"
-    py=year_from(pt) or year_from(pbt) or "Previous"
-    cpl,ppl,cbs,pbs=parse_pl(ct),parse_pl(pt),parse_bs(bt),parse_bs(pbt)
+
+    cy=year_from(cplt) or year_from(ctrdt) or year_from(bt) or "Current"
+    py=year_from(pplt) or year_from(ptrdt) or year_from(pbt) or "Previous"
+    # Safety: latest year must appear first even if the user accidentally swaps files.
+    try:
+        if int(py)>int(cy):
+            st.error("The files selected as Previous Year contain a later year than the Current Year. Please swap the uploads so the latest/subsequent year is Current Year.")
+            st.stop()
+    except Exception:
+        pass
+
+    cpl=parse_pl(ct); ppl=parse_pl(pt); cbs=parse_bs(bt); pbs=parse_bs(pbt)
+    c_has_trading=bool(ctrdf) or any(r["Vertical head"]=="Revenue from operations" for r in cpl)
+    p_has_trading=bool(ptrdf) or any(r["Vertical head"]=="Revenue from operations" for r in ppl)
+    csnp=source_net_profit(cplt); psnp=source_net_profit(pplt)
     warnings=[]
-    # Hard accounting control. If a Trading A/c is present, reconcile the full
-    # vertical statement. If only the P&L is present, reconcile Gross Profit less
-    # the extracted indirect expenses. This validates extraction without inventing Sales/COGS.
+
     def computed_profit(rows):
         a=aggregate(rows,PL_HEADS)
         income=a["Revenue from operations"]+a["Other Income"]
         expenses=sum(a[h] for h in ["Cost of goods sold","Employee benefits expense","Finance costs","Depreciation and amortization expense","Other expenses"])
         return income-expenses
-    def source_aware_profit(rows, txt):
+    def source_aware_profit(rows, pltxt, tradingtxt):
         a=aggregate(rows,PL_HEADS)
-        if abs(a["Revenue from operations"]) > 0.005:
-            return computed_profit(rows), "vertical statement"
-        gp=source_gross_profit(txt)
+        if tradingtxt or abs(a["Revenue from operations"]) > 0.005:
+            return computed_profit(rows), "complete Trading + P&L statement"
+        gp=source_gross_profit(pltxt)
         if gp is not None:
             indirect=sum(a[h] for h in ["Employee benefits expense","Finance costs","Depreciation and amortization expense","Other expenses"])
             return gp + a["Other Income"] - indirect, "Gross Profit less extracted P&L expenses"
-        return computed_profit(rows), "incomplete statement"
-    for yr,txt,rows in [(cy,ct,cpl),(py,pt,ppl)]:
-        snp=source_net_profit(txt)
-        calc,basis=source_aware_profit(rows,txt)
+        return computed_profit(rows), "P&L-only statement"
+
+    for yr,pltxt,tradingtxt,rows,snp in [(cy,cplt,ctrdt,cpl,csnp),(py,pplt,ptrdt,ppl,psnp)]:
+        calc,basis=source_aware_profit(rows,pltxt,tradingtxt)
         if snp is not None and abs(calc-snp)>1.0:
             warnings.append(f"{yr}: P&L DOES NOT RECONCILE — REVIEW REQUIRED. {basis} gives ₹{calc:,.2f}, while source Net Profit is ₹{snp:,.2f}.")
         elif snp is not None:
             warnings.append(f"{yr}: P&L RECONCILED. {basis} agrees with source Net Profit ₹{snp:,.2f}.")
-    if not any(r["Vertical head"]=="Revenue from operations" for r in cpl):
-        gp=source_gross_profit(ct)
-        extra=f" The source P&L contains Gross Profit ₹{gp:,.2f}, but Gross Profit alone cannot establish Sales and Cost of Goods Sold." if gp is not None else ""
-        warnings.append(f"{cy}: Trading Account / Sales is not present in the uploaded current-year file(s), so Revenue from Operations and Cost of Goods Sold cannot be completed.{extra} Upload the current-year Trading Account as an additional PDF for a final statutory-format P&L.")
-    warnings += ["Review car-loan maturity before deciding long-term vs short-term borrowing.",
-                 "Review FDR maturity, loans/advances tenure, and agricultural land classification before finalisation."]
+
+    if not c_has_trading:
+        if c_no_trading:
+            warnings.append(f"{cy}: No separate Trading Account declared. Revenue from operations and Cost of Goods Sold are shown as N/A unless available directly in the P&L; the source Net Profit is preserved.")
+        else:
+            warnings.append(f"{cy}: No Trading Account uploaded. If one exists, upload it to populate Revenue from Operations and Cost of Goods Sold. If none exists, tick 'No separate Trading Account for current year'.")
+    if not p_has_trading:
+        if p_no_trading:
+            warnings.append(f"{py}: No separate Trading Account declared. Revenue from operations and Cost of Goods Sold are shown as N/A unless available directly in the P&L; the source Net Profit is preserved.")
+        else:
+            warnings.append(f"{py}: No Trading Account uploaded. If one exists, upload it; otherwise tick 'No separate Trading Account for previous year'.")
+
+    warnings += ["Review borrowing maturity before deciding long-term vs short-term classification.",
+                 "Review FDR maturity, loans/advances tenure, and land classification before finalisation."]
+
     st.subheader("Review classifications")
-    for label,rows,heads,prefix in [("Current P&L",cpl,PL_HEADS,"cp"),("Previous P&L",ppl,PL_HEADS,"pp"),
+    for label,rows,heads,prefix_key in [("Current P&L + Trading",cpl,PL_HEADS,"cp"),("Previous P&L + Trading",ppl,PL_HEADS,"pp"),
                                     ("Current Balance Sheet",cbs,BS_HEADS,"cb"),("Previous Balance Sheet",pbs,BS_HEADS,"pb")]:
         with st.expander(label,expanded=False):
             for i,r in enumerate(rows):
                 a,b,c=st.columns([3,2,4]); a.write(r["Source ledger"]); b.write(f"₹{r['Amount']:,.2f}")
-                r["Vertical head"]=c.selectbox("Head",heads,index=heads.index(r["Vertical head"]),key=f"{prefix}{i}",label_visibility="collapsed")
+                r["Vertical head"]=c.selectbox("Head",heads,index=heads.index(r["Vertical head"]),key=f"{prefix_key}{i}",label_visibility="collapsed")
     for w in warnings: st.warning(w)
-    data=pdf(entity,address,cy,py,cpl,ppl,cbs,pbs,warnings)
+    data=pdf(entity,address,cy,py,cpl,ppl,cbs,pbs,warnings,csnp,psnp,c_has_trading,p_has_trading)
     st.download_button("Generate comparative vertical PDF (review before finalisation)",data=data,file_name=f"{entity.replace(' ','_')}_comparative_vertical.pdf",mime="application/pdf")
 else:
-    st.info("Upload all four PDFs to create the comparative vertical statements.")
+    st.info("Upload the four required PDFs: current P&L, current Balance Sheet, previous P&L and previous Balance Sheet. Trading Account PDFs are optional for either year.")
